@@ -8,20 +8,30 @@ actor StorageService {
     
     // MARK: - Upload User Photo
     func uploadUserPhoto(userId: UUID, image: UIImage, isPrimary: Bool = false) async throws -> UserPhoto {
+        print("🔄 StorageService: Converting image to JPEG...")
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            print("❌ StorageService: Image conversion failed")
             throw StorageError.imageConversionFailed
         }
+        print("✅ StorageService: Image converted, size: \(imageData.count) bytes")
         
         let fileName = "\(userId.uuidString)/\(UUID().uuidString).jpg"
+        print("🔄 StorageService: Uploading to path: \(fileName)")
         
         // Upload to storage
-        try await supabase.storage
-            .from(SupabaseService.StorageBucket.userPhotos.rawValue)
-            .upload(
-                path: fileName,
-                file: imageData,
-                options: FileOptions(contentType: "image/jpeg")
-            )
+        do {
+            try await supabase.storage
+                .from(SupabaseService.StorageBucket.userPhotos.rawValue)
+                .upload(
+                    path: fileName,
+                    file: imageData,
+                    options: FileOptions(contentType: "image/jpeg")
+                )
+            print("✅ StorageService: File uploaded to storage")
+        } catch {
+            print("❌ StorageService: Storage upload failed: \(error)")
+            throw error
+        }
         
         // Get public URL
         let publicURL = try supabase.storage

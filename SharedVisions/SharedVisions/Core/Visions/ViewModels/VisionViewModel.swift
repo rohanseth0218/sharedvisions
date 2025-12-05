@@ -78,6 +78,8 @@ final class VisionViewModel: ObservableObject {
         description: String?,
         targetMembers: [UUID] = [] // Empty = all members, otherwise specific members
     ) async -> Vision? {
+        print("📝 VisionViewModel.createVision called")
+        print("📝 Title: \(title), GroupID: \(groupId)")
         isLoading = true
         defer { isLoading = false }
         
@@ -93,14 +95,17 @@ final class VisionViewModel: ObservableObject {
                 createdAt: Date()
             )
             
+            print("📝 Inserting vision into Supabase...")
             try await supabase
                 .from(SupabaseService.Table.visions.rawValue)
                 .insert(vision)
                 .execute()
             
+            print("✅ Vision inserted successfully: \(vision.id)")
             visions.insert(vision, at: 0)
             return vision
         } catch {
+            print("❌ Vision creation failed: \(error)")
             errorMessage = error.localizedDescription
             return nil
         }
@@ -108,11 +113,13 @@ final class VisionViewModel: ObservableObject {
     
     // MARK: - Generate Image for Vision
     func generateImage(for vision: Vision, style: ImageStyle = .realistic) async -> GeneratedImage? {
+        print("🖼️ VisionViewModel: Starting image generation for vision: \(vision.title)")
         isGenerating = true
         defer { isGenerating = false }
         
         do {
             // Update vision status to generating
+            print("🖼️ VisionViewModel: Updating status to generating...")
             try await updateVisionStatus(vision.id, status: .generating)
             
             // Get group members with user info
@@ -123,28 +130,15 @@ final class VisionViewModel: ObservableObject {
                 .execute()
                 .value
             
-            // Determine which members to include
-            let targetUserIds: [UUID]
-            if vision.targetMembers.isEmpty {
-                // All members
-                targetUserIds = members.map { $0.userId }
-            } else {
-                // Specific members
-                targetUserIds = vision.targetMembers
-            }
-            
-            // Get member photos for the vision
-            let memberPhotos = try await fetchMemberPhotos(for: vision, targetUserIds: targetUserIds)
-            
             // Parse prompt to identify which members should be included (AI-powered)
             let currentUserId = vision.createdBy ?? UUID()
-            let currentUser = try? await supabase
+            let currentUser: User? = try? await supabase
                 .from(SupabaseService.Table.profiles.rawValue)
                 .select()
                 .eq("id", value: currentUserId)
                 .single()
                 .execute()
-                .value as? User
+                .value
             
             let currentUserName = currentUser?.fullName ?? "me"
             let fullPrompt = vision.title + (vision.description.map { " " + $0 } ?? "")
@@ -157,16 +151,19 @@ final class VisionViewModel: ObservableObject {
                 currentUserName: currentUserName
             )
             
-            // Determine target user IDs: use parsed members if found, otherwise use selected members or all
+            // Determine target user IDs: prioritize manual selection, then AI parsing, then all members
             let finalTargetUserIds: [UUID]
-            if !mentionedMembers.isEmpty {
-                // Use AI-parsed members
-                finalTargetUserIds = Array(mentionedMembers.keys)
-            } else if !vision.targetMembers.isEmpty {
-                // Use manually selected members
+            if !vision.targetMembers.isEmpty {
+                // User explicitly selected members - use those (highest priority)
+                print("👥 Using manually selected members: \(vision.targetMembers.count)")
                 finalTargetUserIds = vision.targetMembers
+            } else if !mentionedMembers.isEmpty {
+                // AI parsed members from description - use those
+                print("🤖 Using AI-parsed members from description: \(mentionedMembers.keys.count)")
+                finalTargetUserIds = Array(mentionedMembers.keys)
             } else {
                 // Default to all members
+                print("👥 Using all group members (default)")
                 finalTargetUserIds = members.map { $0.userId }
             }
             
@@ -220,9 +217,12 @@ final class VisionViewModel: ObservableObject {
                 visions[index] = updatedVision
             }
             
+            print("✅ VisionViewModel: Image generation complete!")
             return generatedImage
         } catch {
             // Update vision status to failed
+            print("❌ VisionViewModel: Image generation failed: \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
             try? await updateVisionStatus(vision.id, status: .failed)
             errorMessage = error.localizedDescription
             return nil
@@ -255,16 +255,16 @@ final class VisionViewModel: ObservableObject {
     
     // MARK: - Build Member Name Map
     /// Creates a mapping of user IDs to their names for prompt generation
-    private func buildMemberNameMap(members: [GroupMember], currentUserId: UUID) -> [UUID: String] {
-        var nameMap: [UUID: String] = [:]
+    private func buildMemberNameMap(members: [GroupMember], currentUserId: UUID) -> [String: String] {
+        var nameMap: [String: String] = [:]
         
         for member in members {
             if let name = member.user?.fullName {
                 // Use first name for more natural prompts
                 let firstName = name.components(separatedBy: " ").first ?? name
-                nameMap[member.userId] = firstName
+                nameMap[member.userId.uuidString] = firstName
             } else if let username = member.user?.username {
-                nameMap[member.userId] = username
+                nameMap[member.userId.uuidString] = username
             }
         }
         

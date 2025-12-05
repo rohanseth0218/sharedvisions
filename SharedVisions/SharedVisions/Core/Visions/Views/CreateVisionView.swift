@@ -189,11 +189,12 @@ struct CreateVisionView: View {
                         }
                         .padding(.horizontal)
                         
-                        Spacer(minLength: 20)
+                        Spacer(minLength: 100) // Extra space for bottom button
                     }
                 }
+                .scrollContentBackground(.hidden)
                 
-                // Bottom button
+                // Bottom button overlay
                 VStack {
                     Spacer()
                     
@@ -227,6 +228,7 @@ struct CreateVisionView: View {
                     .disabled(!isFormValid || isCreating)
                     .opacity(!isFormValid ? 0.6 : 1)
                 }
+                .allowsHitTesting(true)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -236,13 +238,28 @@ struct CreateVisionView: View {
                     }
                 }
             }
-            .task {
-                if let userId = authViewModel.currentUser?.id {
-                    await groupViewModel.fetchGroups(userId: userId)
-                    selectedGroup = groupViewModel.groups.first
-                    if let group = groupViewModel.groups.first {
-                        await groupViewModel.fetchMembers(groupId: group.id)
-                        groupMembers = groupViewModel.members
+            .onAppear {
+                print("📝 CreateVisionView appeared")
+                print("📝 currentUser: \(String(describing: authViewModel.currentUser))")
+                
+                Task {
+                    // If no user, try to reload session first
+                    if authViewModel.currentUser == nil && authViewModel.isAuthenticated {
+                        print("📝 No user but authenticated, reloading session...")
+                        await authViewModel.checkSession()
+                    }
+                    
+                    if let userId = authViewModel.currentUser?.id {
+                        print("📝 Fetching groups for user: \(userId)")
+                        await groupViewModel.fetchGroups(userId: userId)
+                        print("📝 Found \(groupViewModel.groups.count) groups")
+                        selectedGroup = groupViewModel.groups.first
+                        if let group = groupViewModel.groups.first {
+                            await groupViewModel.fetchMembers(groupId: group.id)
+                            groupMembers = groupViewModel.members
+                        }
+                    } else {
+                        print("❌ No user ID available for fetching groups")
                     }
                 }
             }
@@ -263,15 +280,24 @@ struct CreateVisionView: View {
     }
     
     private func createVision() {
-        guard let group = selectedGroup,
-              let userId = authViewModel.currentUser?.id else { return }
+        print("🚀 createVision() called")
+        guard let group = selectedGroup else {
+            print("❌ No group selected")
+            return
+        }
+        guard let userId = authViewModel.currentUser?.id else {
+            print("❌ No user ID")
+            return
+        }
         
+        print("🚀 Creating vision for group: \(group.name), user: \(userId)")
         isCreating = true
         
         Task {
             // If user manually selected members, use those; otherwise AI will parse from description
             let targetMemberIds = selectedMembers.isEmpty ? [] : Array(selectedMembers)
             
+            print("🚀 Calling viewModel.createVision...")
             if let vision = await viewModel.createVision(
                 groupId: group.id,
                 createdBy: userId,
@@ -279,10 +305,16 @@ struct CreateVisionView: View {
                 description: description.isEmpty ? nil : description,
                 targetMembers: targetMemberIds // Empty = AI will parse, non-empty = use manual selection
             ) {
+                print("✅ Vision created: \(vision.id)")
                 if generateImmediately {
-                    await viewModel.generateImage(for: vision, style: selectedStyle)
+                    print("🚀 Generating image immediately...")
+                    let result = await viewModel.generateImage(for: vision, style: selectedStyle)
+                    print("🚀 Generate image result: \(String(describing: result))")
                 }
                 dismiss()
+            } else {
+                print("❌ Vision creation returned nil")
+                print("❌ Error: \(String(describing: viewModel.errorMessage))")
             }
             isCreating = false
         }

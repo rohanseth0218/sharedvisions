@@ -4,13 +4,13 @@ import UIKit
 
 /// Service for AI image generation using Google Gemini
 actor GeminiService {
-    private let model: GenerativeModel
-    private let storageService = StorageService()
+    private let textModel: GenerativeModel
+    private let apiKey: String
     
     init() {
-        // Initialize Gemini model for image generation
-        // Note: Using gemini-2.0-flash-exp for image generation capabilities
-        self.model = GenerativeModel(
+        self.apiKey = Secrets.geminiAPIKey
+        // Text model for prompt enhancement and parsing
+        self.textModel = GenerativeModel(
             name: "gemini-2.0-flash-exp",
             apiKey: Secrets.geminiAPIKey
         )
@@ -18,6 +18,7 @@ actor GeminiService {
     
     // MARK: - Generate Vision Image
     /// Generates an AI image based on the vision description and member photos
+    /// Uses text generation to enhance the prompt, then calls Imagen for actual image generation
     func generateVisionImage(
         vision: Vision,
         memberPhotos: [UserPhoto],
@@ -26,48 +27,33 @@ actor GeminiService {
         // Build the prompt
         let prompt = buildPrompt(vision: vision, style: style)
         
-        // Download reference photos for context
-        var imageParts: [any ThrowingPartsRepresentable] = []
+        // Use Gemini to enhance the prompt
+        let response = try await textModel.generateContent(prompt)
         
-        for photo in memberPhotos.prefix(4) { // Limit to 4 photos
-            if let imageData = await downloadImage(from: photo.photoUrl) {
-                imageParts.append(imageData)
-            }
-        }
-        
-        // Generate image with Gemini
-        // Note: As of the current API, we use text generation with image context
-        // The actual image generation may require Imagen API or future Gemini capabilities
-        let response = try await model.generateContent(
-            prompt,
-            imageParts.isEmpty ? nil : imageParts.first
-        )
-        
-        // For now, we'll create a placeholder response
-        // In production, integrate with Google's Imagen API for actual image generation
-        guard let text = response.text else {
+        guard let enhancedPrompt = response.text else {
             throw GeminiError.generationFailed
         }
         
-        // TODO: Replace with actual Imagen API call when available
-        // For demonstration, we'll return a generated prompt description
-        // The actual implementation would return image data from Imagen
-        
-        throw GeminiError.imageGenerationNotSupported
+        // Use the enhanced prompt with Imagen API for actual image generation
+        return try await generateImageWithImagen(prompt: enhancedPrompt, memberPhotos: memberPhotos)
     }
     
-    // MARK: - Generate Image with Imagen
-    /// Uses Google's Imagen API to generate images
-    /// Note: This requires separate Imagen API access
-    /// Can include member photos as reference for personalized generation
+    // MARK: - Generate Image with Gemini
+    /// Uses Google's Gemini model with image generation capabilities
+    /// Based on ripple-backend approach using gemini-2.0-flash-exp with responseModalities
     func generateImageWithImagen(
         prompt: String,
         memberPhotos: [UserPhoto] = []
     ) async throws -> Data {
-        // Imagen API endpoint
-        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateImages"
+        print("🎨 GeminiService: Starting image generation...")
+        print("🎨 Prompt: \(prompt.prefix(100))...")
+        print("🎨 Member photos: \(memberPhotos.count)")
         
-        guard let url = URL(string: "\(endpoint)?key=\(Secrets.geminiAPIKey)") else {
+        // Use Gemini API with image generation model
+        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+        
+        guard let url = URL(string: "\(endpoint)?key=\(apiKey)") else {
+            print("❌ GeminiService: Invalid endpoint")
             throw GeminiError.invalidEndpoint
         }
         
@@ -75,48 +61,112 @@ actor GeminiService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Build prompt with member photo context if available
+        // Build parts array: text prompt + member photos as image references
+        var parts: [[String: Any]] = []
+        
+        // Add text prompt with context about member photos
         var finalPrompt = prompt
         if !memberPhotos.isEmpty {
-            // Add context about the people in the image
-            let memberContext = "This image should feature the specific people whose reference photos are provided. "
-            finalPrompt = memberContext + prompt
+            finalPrompt = "Generate an image showing these specific people (reference photos provided): \(prompt)"
+        }
+        parts.append(["text": finalPrompt])
+        
+        // Download and add member photos as image references
+        for (index, photo) in memberPhotos.enumerated() {
+            print("🎨 Downloading member photo \(index + 1)/\(memberPhotos.count): \(photo.photoUrl)")
+            do {
+                guard let photoURL = URL(string: photo.photoUrl) else {
+                    print("⚠️ Invalid photo URL: \(photo.photoUrl)")
+                    continue
+                }
+                
+                let (imageData, _) = try await URLSession.shared.data(from: photoURL)
+                
+                // Convert to base64
+                let base64String = imageData.base64EncodedString()
+                
+                // Determine MIME type from URL or default to JPEG
+                let mimeType = photo.photoUrl.lowercased().contains(".png") ? "image/png" : "image/jpeg"
+                
+                // Add as inlineData part
+                parts.append([
+                    "inlineData": [
+                        "mimeType": mimeType,
+                        "data": base64String
+                    ]
+                ])
+                
+                print("✅ Added member photo \(index + 1) as reference")
+            } catch {
+                print("⚠️ Failed to download member photo \(index + 1): \(error)")
+                // Continue with other photos even if one fails
+            }
         }
         
+        // Request body matching ripple's approach
         let body: [String: Any] = [
-            "instances": [
-                ["prompt": finalPrompt]
+            "contents": [
+                [
+                    "parts": parts
+                ]
             ],
-            "parameters": [
-                "sampleCount": 1,
-                "aspectRatio": "1:1",
-                "safetyFilterLevel": "block_medium_and_above"
+            "generationConfig": [
+                "responseModalities": ["TEXT", "IMAGE"],
+                "temperature": 1.0
             ]
         ]
         
-        // Note: If Imagen API supports image references, we could add them here:
-        // For now, we rely on the prompt description and member photos are used
-        // for context in the prompt enhancement phase
-        
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
+        print("🎨 GeminiService: Sending request to Gemini API...")
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ GeminiService: No HTTP response")
+            throw GeminiError.generationFailed
+        }
+        
+        print("🎨 GeminiService: Response status: \(httpResponse.statusCode)")
+        
+        if httpResponse.statusCode != 200 {
+            let responseBody = String(data: data, encoding: .utf8) ?? "No body"
+            print("❌ GeminiService: Error response: \(responseBody)")
             throw GeminiError.generationFailed
         }
         
         // Parse response and extract image data
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let predictions = json["predictions"] as? [[String: Any]],
-              let firstPrediction = predictions.first,
-              let imageBase64 = firstPrediction["bytesBase64Encoded"] as? String,
-              let imageData = Data(base64Encoded: imageBase64) else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("❌ GeminiService: Failed to parse JSON")
             throw GeminiError.parsingFailed
         }
         
-        return imageData
+        print("🎨 GeminiService: Response JSON keys: \(json.keys)")
+        
+        // Parse Gemini response structure: candidates[0].content.parts[].inlineData
+        guard let candidates = json["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let content = firstCandidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]] else {
+            print("❌ GeminiService: Failed to parse candidates/content/parts")
+            print("❌ Response: \(json)")
+            throw GeminiError.parsingFailed
+        }
+        
+        // Look for image data in parts
+        for part in parts {
+            if let inlineData = part["inlineData"] as? [String: Any],
+               let mimeType = inlineData["mimeType"] as? String,
+               mimeType.hasPrefix("image/"),
+               let base64Data = inlineData["data"] as? String,
+               let imageData = Data(base64Encoded: base64Data) {
+                print("✅ GeminiService: Found image data, mimeType: \(mimeType), size: \(imageData.count) bytes")
+                return imageData
+            }
+        }
+        
+        print("❌ GeminiService: No image data found in response parts")
+        print("❌ Parts: \(parts)")
+        throw GeminiError.parsingFailed
     }
     
     // MARK: - Build Prompt
@@ -141,7 +191,7 @@ actor GeminiService {
     /// Includes member names, aesthetic profile, and context for personalized image generation
     func enhancePrompt(
         userDescription: String,
-        memberNames: [String: String] = [:], // userId -> name mapping
+        memberNames: [String: String] = [:], // uuidString -> name mapping
         aestheticProfile: AestheticProfile? = nil
     ) async throws -> String {
         var systemPrompt = """
@@ -162,7 +212,7 @@ actor GeminiService {
             systemPrompt += "\n\nCRITICAL: Apply this consistent aesthetic to maintain visual harmony with all other images from this group:\n\(aesthetic.promptSuffix())"
         }
         
-        let response = try await model.generateContent(
+        let response = try await textModel.generateContent(
             systemPrompt,
             "User's vision: \(userDescription)"
         )
@@ -221,7 +271,7 @@ actor GeminiService {
         If it just says "a beach vacation" without mentioning people, return an empty array (meaning all members).
         """
         
-        let response = try await model.generateContent(parsingPrompt)
+        let response = try await textModel.generateContent(parsingPrompt)
         
         guard let responseText = response.text else {
             // Fallback to simple parsing if AI fails

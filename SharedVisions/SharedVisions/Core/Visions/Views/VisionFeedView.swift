@@ -34,6 +34,7 @@ struct VisionFeedView: View {
             }
             .sheet(isPresented: $showCreateVision) {
                 CreateVisionView(viewModel: viewModel)
+                    .environmentObject(authViewModel)
             }
             .task {
                 if let userId = authViewModel.currentUser?.id {
@@ -87,6 +88,7 @@ struct VisionFeedView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
     }
 }
 

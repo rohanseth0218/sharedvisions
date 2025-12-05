@@ -4,7 +4,7 @@ struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     
     var body: some View {
-        Group {
+        ZStack {
             if authViewModel.isLoading {
                 LoadingView()
             } else if authViewModel.isAuthenticated {

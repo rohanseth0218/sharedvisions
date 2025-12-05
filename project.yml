@@ -13,6 +13,9 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: SharedVisions/SharedVisions
+        excludes:
+          - "**/*.md"
+          - "**/Resources/**"
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.rohanseth.SharedVisions
       PRODUCT_NAME: SharedVisions
@@ -22,7 +25,9 @@ targets:
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: supabase-swift
+        product: Supabase
       - package: google-generative-ai-swift
+        product: GoogleGenerativeAI
 
 packages:
   supabase-swift:

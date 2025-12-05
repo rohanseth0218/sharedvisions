@@ -12,14 +12,17 @@ final class AuthViewModel: ObservableObject {
     
     // MARK: - Check Session
     func checkSession() async {
+        print("🔐 Checking session...")
         isLoading = true
         defer { isLoading = false }
         
         let hasSession = await authService.checkSession()
+        print("🔐 Has session: \(hasSession)")
         isAuthenticated = hasSession
         
         if hasSession {
             await loadCurrentUser()
+            print("🔐 Current user after load: \(String(describing: currentUser))")
         }
     }
     
@@ -44,15 +47,19 @@ final class AuthViewModel: ObservableObject {
     
     // MARK: - Sign In
     func signIn(email: String, password: String) async {
+        print("🔐 Signing in: \(email)")
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         
         do {
             try await authService.signIn(email: email, password: password)
+            print("🔐 Sign in successful, loading user...")
             await loadCurrentUser()
+            print("🔐 User loaded: \(String(describing: currentUser))")
             isAuthenticated = true
         } catch {
+            print("❌ Sign in failed: \(error)")
             errorMessage = error.localizedDescription
         }
     }
@@ -70,9 +77,12 @@ final class AuthViewModel: ObservableObject {
     
     // MARK: - Load Current User
     private func loadCurrentUser() async {
+        print("🔐 Loading current user from database...")
         do {
             currentUser = try await authService.getCurrentUser()
+            print("🔐 Loaded user: \(String(describing: currentUser))")
         } catch {
+            print("❌ Failed to load user: \(error)")
             errorMessage = error.localizedDescription
         }
     }

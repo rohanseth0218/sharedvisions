@@ -42,7 +42,7 @@ struct ImageGenerationRequest {
     }
 }
 
-enum ImageStyle: String, CaseIterable {
+enum ImageStyle: String, Codable, CaseIterable {
     case realistic = "realistic"
     case artistic = "artistic"
     case cinematic = "cinematic"

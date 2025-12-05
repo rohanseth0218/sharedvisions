@@ -114,6 +114,7 @@ struct GroupListView: View {
             }
             .padding()
         }
+        .scrollContentBackground(.hidden)
     }
 }
 

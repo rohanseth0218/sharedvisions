@@ -24,6 +24,7 @@ final class ProfileViewModel: ObservableObject {
     
     // MARK: - Upload Photo
     func uploadPhoto(userId: UUID, image: UIImage, isPrimary: Bool = false) async -> UserPhoto? {
+        print("📸 Starting photo upload for user: \(userId)")
         isUploading = true
         defer { isUploading = false }
         
@@ -33,6 +34,7 @@ final class ProfileViewModel: ObservableObject {
                 image: image,
                 isPrimary: isPrimary
             )
+            print("✅ Photo uploaded successfully: \(photo.photoUrl)")
             
             // If this is primary, update local state
             if isPrimary {
@@ -50,6 +52,8 @@ final class ProfileViewModel: ObservableObject {
             userPhotos.insert(photo, at: 0)
             return photo
         } catch {
+            print("❌ Photo upload failed: \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
             return nil
         }

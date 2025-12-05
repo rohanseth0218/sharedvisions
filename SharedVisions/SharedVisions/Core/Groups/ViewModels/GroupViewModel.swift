@@ -202,14 +202,16 @@ final class GroupViewModel: ObservableObject {
     // MARK: - Update Aesthetic Profile
     func updateAestheticProfile(groupId: UUID, aestheticProfile: AestheticProfile) async {
         do {
-            // Encode aesthetic profile to JSON
-            let encoder = JSONEncoder()
-            let profileData = try encoder.encode(aestheticProfile)
-            let profileJSON = try JSONSerialization.jsonObject(with: profileData) as? [String: Any]
+            // Create an update struct that's Encodable
+            struct AestheticUpdate: Encodable {
+                let aesthetic_profile: AestheticProfile
+            }
+            
+            let update = AestheticUpdate(aesthetic_profile: aestheticProfile)
             
             try await supabase
                 .from(SupabaseService.Table.groups.rawValue)
-                .update(["aesthetic_profile": profileJSON])
+                .update(update)
                 .eq("id", value: groupId)
                 .execute()
             

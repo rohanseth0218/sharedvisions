@@ -172,12 +172,24 @@ struct PhotoUploadView: View {
     }
     
     private func uploadPhoto() {
-        guard let image = selectedImage,
-              let userId = authViewModel.currentUser?.id else { return }
+        print("📸 Upload button tapped")
+        guard let image = selectedImage else {
+            print("❌ No image selected")
+            return
+        }
+        guard let userId = authViewModel.currentUser?.id else {
+            print("❌ No user ID - user not logged in?")
+            print("❌ Current user: \(String(describing: authViewModel.currentUser))")
+            return
+        }
         
+        print("✅ Starting upload for user: \(userId)")
         Task {
-            if let _ = await viewModel.uploadPhoto(userId: userId, image: image, isPrimary: isPrimary) {
+            if let photo = await viewModel.uploadPhoto(userId: userId, image: image, isPrimary: isPrimary) {
+                print("✅ Upload complete: \(photo.photoUrl)")
                 dismiss()
+            } else {
+                print("❌ Upload returned nil")
             }
         }
     }

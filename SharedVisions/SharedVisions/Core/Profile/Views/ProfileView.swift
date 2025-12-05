@@ -32,6 +32,7 @@ struct ProfileView: View {
                     }
                     .padding()
                 }
+                .scrollContentBackground(.hidden)
             }
             .navigationTitle("Profile")
             .toolbar {
@@ -45,13 +46,30 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showPhotoUpload) {
                 PhotoUploadView(viewModel: viewModel)
+                    .environmentObject(authViewModel)
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
-            .task {
-                if let userId = authViewModel.currentUser?.id {
-                    await viewModel.fetchUserPhotos(userId: userId)
+            .onAppear {
+                print("👤 ProfileView appeared")
+                print("👤 isAuthenticated: \(authViewModel.isAuthenticated)")
+                print("👤 currentUser: \(String(describing: authViewModel.currentUser))")
+                
+                // If authenticated but no user, try to reload in a detached task
+                if authViewModel.isAuthenticated && authViewModel.currentUser == nil {
+                    print("👤 User is authenticated but currentUser is nil, reloading...")
+                    Task {
+                        await authViewModel.checkSession()
+                        print("👤 After reload - currentUser: \(String(describing: authViewModel.currentUser))")
+                        if let userId = authViewModel.currentUser?.id {
+                            await viewModel.fetchUserPhotos(userId: userId)
+                        }
+                    }
+                } else if let userId = authViewModel.currentUser?.id {
+                    Task {
+                        await viewModel.fetchUserPhotos(userId: userId)
+                    }
                 }
             }
         }
