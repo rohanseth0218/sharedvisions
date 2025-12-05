@@ -1,0 +1,44 @@
+name: SharedVisions
+options:
+  bundleIdPrefix: com.rohanseth
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+  xcodeVersion: "15.0"
+
+targets:
+  SharedVisions:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: SharedVisions/SharedVisions
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.rohanseth.SharedVisions
+      PRODUCT_NAME: SharedVisions
+      SWIFT_VERSION: "5.9"
+      TARGETED_DEVICE_FAMILY: "1" # iPhone only
+      INFOPLIST_FILE: SharedVisions/SharedVisions/Info.plist
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: supabase-swift
+      - package: google-generative-ai-swift
+
+packages:
+  supabase-swift:
+    url: https://github.com/supabase/supabase-swift
+    from: "2.0.0"
+  google-generative-ai-swift:
+    url: https://github.com/google/generative-ai-swift
+    from: "0.5.0"
+
+schemes:
+  SharedVisions:
+    build:
+      targets:
+        SharedVisions: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+
