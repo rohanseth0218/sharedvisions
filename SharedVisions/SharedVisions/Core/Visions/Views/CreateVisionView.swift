@@ -10,6 +10,8 @@ struct CreateVisionView: View {
     @State private var title = ""
     @State private var description = ""
     @State private var selectedGroup: Group?
+    @State private var selectedMembers: Set<UUID> = [] // Selected members for this vision
+    @State private var groupMembers: [GroupMember] = []
     @State private var selectedStyle: ImageStyle = .realistic
     @State private var generateImmediately = true
     @State private var isCreating = false
@@ -102,13 +104,49 @@ struct CreateVisionView: View {
                                     .fontWeight(.medium)
                                     .foregroundStyle(.secondary)
                                 
-                                TextField("Add more details about your vision...", text: $description, axis: .vertical)
+                                TextField("e.g., An image of me and Izzy on a beach in Maldives", text: $description, axis: .vertical)
                                     .textFieldStyle(.plain)
                                     .lineLimit(3...6)
                                     .padding()
                                     .background(.white)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                                     .shadow(color: .black.opacity(0.05), radius: 5, y: 2)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("💡 AI will automatically detect who should be in the image")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Text("Examples: 'me and Izzy', 'Sarah and John', 'all of us'")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .italic()
+                                }
+                                .padding(.top, 4)
+                            }
+                            
+                            // Optional: Manual Member Selection (Advanced)
+                            if let group = selectedGroup, !groupMembers.isEmpty {
+                                DisclosureGroup("Advanced: Manually select members (optional)") {
+                                    VStack(spacing: 8) {
+                                        ForEach(groupMembers) { member in
+                                            MemberSelectionRow(
+                                                member: member,
+                                                isSelected: selectedMembers.contains(member.userId)
+                                            ) {
+                                                if selectedMembers.contains(member.userId) {
+                                                    selectedMembers.remove(member.userId)
+                                                } else {
+                                                    selectedMembers.insert(member.userId)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(.top, 8)
+                                }
+                                .padding()
+                                .background(.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
                             
                             // Style selector
@@ -202,6 +240,19 @@ struct CreateVisionView: View {
                 if let userId = authViewModel.currentUser?.id {
                     await groupViewModel.fetchGroups(userId: userId)
                     selectedGroup = groupViewModel.groups.first
+                    if let group = groupViewModel.groups.first {
+                        await groupViewModel.fetchMembers(groupId: group.id)
+                        groupMembers = groupViewModel.members
+                    }
+                }
+            }
+            .onChange(of: selectedGroup) { _, newGroup in
+                if let group = newGroup {
+                    Task {
+                        await groupViewModel.fetchMembers(groupId: group.id)
+                        groupMembers = groupViewModel.members
+                        selectedMembers = [] // Reset selection when group changes
+                    }
                 }
             }
         }
@@ -218,11 +269,15 @@ struct CreateVisionView: View {
         isCreating = true
         
         Task {
+            // If user manually selected members, use those; otherwise AI will parse from description
+            let targetMemberIds = selectedMembers.isEmpty ? [] : Array(selectedMembers)
+            
             if let vision = await viewModel.createVision(
                 groupId: group.id,
                 createdBy: userId,
                 title: title,
-                description: description.isEmpty ? nil : description
+                description: description.isEmpty ? nil : description,
+                targetMembers: targetMemberIds // Empty = AI will parse, non-empty = use manual selection
             ) {
                 if generateImmediately {
                     await viewModel.generateImage(for: vision, style: selectedStyle)
@@ -276,6 +331,55 @@ struct StyleButton: View {
         case .cinematic: return "film"
         case .dreamy: return "cloud"
         }
+    }
+}
+
+struct MemberSelectionRow: View {
+    let member: GroupMember
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                // Checkbox
+                ZStack {
+                    Circle()
+                        .stroke(isSelected ? Color(red: 0.4, green: 0.2, blue: 0.6) : Color.gray.opacity(0.3), lineWidth: 2)
+                        .frame(width: 24, height: 24)
+                    
+                    if isSelected {
+                        Circle()
+                            .fill(Color(red: 0.4, green: 0.2, blue: 0.6))
+                            .frame(width: 16, height: 16)
+                        
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                
+                // Avatar
+                Circle()
+                    .fill(Color(red: 0.9, green: 0.9, blue: 0.95))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Text(String((member.user?.fullName ?? "Member").prefix(1)).uppercased())
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color(red: 0.4, green: 0.2, blue: 0.6))
+                    )
+                
+                // Name
+                Text(member.user?.fullName ?? "Member")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                
+                Spacer()
+            }
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
     }
 }
 

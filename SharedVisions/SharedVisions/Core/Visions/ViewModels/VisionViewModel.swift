@@ -76,7 +76,7 @@ final class VisionViewModel: ObservableObject {
         createdBy: UUID,
         title: String,
         description: String?,
-        targetMembers: [UUID] = []
+        targetMembers: [UUID] = [] // Empty = all members, otherwise specific members
     ) async -> Vision? {
         isLoading = true
         defer { isLoading = false }
@@ -115,14 +115,82 @@ final class VisionViewModel: ObservableObject {
             // Update vision status to generating
             try await updateVisionStatus(vision.id, status: .generating)
             
+            // Get group members with user info
+            let members: [GroupMember] = try await supabase
+                .from(SupabaseService.Table.groupMembers.rawValue)
+                .select("*, profiles(*)")
+                .eq("group_id", value: vision.groupId)
+                .execute()
+                .value
+            
+            // Determine which members to include
+            let targetUserIds: [UUID]
+            if vision.targetMembers.isEmpty {
+                // All members
+                targetUserIds = members.map { $0.userId }
+            } else {
+                // Specific members
+                targetUserIds = vision.targetMembers
+            }
+            
             // Get member photos for the vision
-            let memberPhotos = try await fetchMemberPhotos(for: vision)
+            let memberPhotos = try await fetchMemberPhotos(for: vision, targetUserIds: targetUserIds)
             
-            // Build the prompt
-            let enhancedPrompt = try await geminiService.enhancePrompt(userDescription: vision.title + (vision.description ?? ""))
+            // Parse prompt to identify which members should be included (AI-powered)
+            let currentUserId = vision.createdBy ?? UUID()
+            let currentUser = try? await supabase
+                .from(SupabaseService.Table.profiles.rawValue)
+                .select()
+                .eq("id", value: currentUserId)
+                .single()
+                .execute()
+                .value as? User
             
-            // Generate image using Imagen API
-            let imageData = try await geminiService.generateImageWithImagen(prompt: enhancedPrompt)
+            let currentUserName = currentUser?.fullName ?? "me"
+            let fullPrompt = vision.title + (vision.description.map { " " + $0 } ?? "")
+            
+            // Use AI to parse which members are mentioned in the prompt
+            let mentionedMembers = try await geminiService.parsePromptForMembers(
+                prompt: fullPrompt,
+                availableMembers: members,
+                currentUserId: currentUserId,
+                currentUserName: currentUserName
+            )
+            
+            // Determine target user IDs: use parsed members if found, otherwise use selected members or all
+            let finalTargetUserIds: [UUID]
+            if !mentionedMembers.isEmpty {
+                // Use AI-parsed members
+                finalTargetUserIds = Array(mentionedMembers.keys)
+            } else if !vision.targetMembers.isEmpty {
+                // Use manually selected members
+                finalTargetUserIds = vision.targetMembers
+            } else {
+                // Default to all members
+                finalTargetUserIds = members.map { $0.userId }
+            }
+            
+            // Get member photos for the identified members
+            let memberPhotos = try await fetchMemberPhotos(for: vision, targetUserIds: finalTargetUserIds)
+            
+            // Build member name mapping for prompt enhancement
+            let targetMembers = members.filter { finalTargetUserIds.contains($0.userId) }
+            let memberNameMap = buildMemberNameMap(
+                members: targetMembers,
+                currentUserId: currentUserId
+            )
+            
+            // Enhance the prompt with member context
+            let enhancedPrompt = try await geminiService.enhancePrompt(
+                userDescription: fullPrompt,
+                memberNames: memberNameMap
+            )
+            
+            // Generate image using Imagen API with member photos as context
+            let imageData = try await geminiService.generateImageWithImagen(
+                prompt: enhancedPrompt,
+                memberPhotos: memberPhotos
+            )
             
             // Upload to storage
             let generatedImage = try await storageService.uploadGeneratedImage(
@@ -161,32 +229,64 @@ final class VisionViewModel: ObservableObject {
     }
     
     // MARK: - Fetch Member Photos
-    private func fetchMemberPhotos(for vision: Vision) async throws -> [UserPhoto] {
-        // Get group members
-        let members: [GroupMember] = try await supabase
-            .from(SupabaseService.Table.groupMembers.rawValue)
-            .select()
-            .eq("group_id", value: vision.groupId)
-            .execute()
-            .value
-        
-        // Filter to target members if specified
-        let targetUserIds: [UUID]
-        if vision.targetMembers.isEmpty {
-            targetUserIds = members.map { $0.userId }
-        } else {
-            targetUserIds = vision.targetMembers
-        }
-        
-        // Get photos for target members
+    private func fetchMemberPhotos(for vision: Vision, targetUserIds: [UUID]) async throws -> [UserPhoto] {
+        // Get photos for target members (prioritize primary photos)
         let photos: [UserPhoto] = try await supabase
             .from(SupabaseService.Table.userPhotos.rawValue)
             .select()
             .in("user_id", values: targetUserIds)
+            .order("is_primary", ascending: false)
+            .order("created_at", ascending: false)
             .execute()
             .value
         
         return photos
+    }
+    
+    // MARK: - Build Member Name Map
+    /// Creates a mapping of user IDs to their names for prompt generation
+    private func buildMemberNameMap(members: [GroupMember], currentUserId: UUID) -> [UUID: String] {
+        var nameMap: [UUID: String] = [:]
+        
+        for member in members {
+            if let name = member.user?.fullName {
+                // Use first name for more natural prompts
+                let firstName = name.components(separatedBy: " ").first ?? name
+                nameMap[member.userId] = firstName
+            } else if let username = member.user?.username {
+                nameMap[member.userId] = username
+            }
+        }
+        
+        return nameMap
+    }
+    
+    // MARK: - Enhance Description with Member Names
+    /// Replaces "me" and "I" with actual names in the description
+    private func enhanceDescriptionWithMemberNames(
+        description: String,
+        memberNameMap: [UUID: String],
+        currentUserId: UUID
+    ) -> String {
+        var enhanced = description
+        
+        // Replace "me" with actual name if current user is in the map
+        if let currentUserName = memberNameMap[currentUserId] {
+            // Replace "me" (word boundary) with name
+            enhanced = enhanced.replacingOccurrences(
+                of: "\\bme\\b",
+                with: currentUserName,
+                options: [.regularExpression, .caseInsensitive]
+            )
+            // Replace "I" at start of sentence
+            enhanced = enhanced.replacingOccurrences(
+                of: "^I ",
+                with: "\(currentUserName) ",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        
+        return enhanced
     }
     
     // MARK: - Toggle Favorite

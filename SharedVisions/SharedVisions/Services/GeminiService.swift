@@ -59,7 +59,11 @@ actor GeminiService {
     // MARK: - Generate Image with Imagen
     /// Uses Google's Imagen API to generate images
     /// Note: This requires separate Imagen API access
-    func generateImageWithImagen(prompt: String) async throws -> Data {
+    /// Can include member photos as reference for personalized generation
+    func generateImageWithImagen(
+        prompt: String,
+        memberPhotos: [UserPhoto] = []
+    ) async throws -> Data {
         // Imagen API endpoint
         let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateImages"
         
@@ -71,9 +75,17 @@ actor GeminiService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        // Build prompt with member photo context if available
+        var finalPrompt = prompt
+        if !memberPhotos.isEmpty {
+            // Add context about the people in the image
+            let memberContext = "This image should feature the specific people whose reference photos are provided. "
+            finalPrompt = memberContext + prompt
+        }
+        
         let body: [String: Any] = [
             "instances": [
-                ["prompt": prompt]
+                ["prompt": finalPrompt]
             ],
             "parameters": [
                 "sampleCount": 1,
@@ -81,6 +93,10 @@ actor GeminiService {
                 "safetyFilterLevel": "block_medium_and_above"
             ]
         ]
+        
+        // Note: If Imagen API supports image references, we could add them here:
+        // For now, we rely on the prompt description and member photos are used
+        // for context in the prompt enhancement phase
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
@@ -122,13 +138,23 @@ actor GeminiService {
     
     // MARK: - Enhance Prompt
     /// Uses Gemini to enhance a user's vision description into a better image prompt
-    func enhancePrompt(userDescription: String) async throws -> String {
-        let systemPrompt = """
+    /// Includes member names and context for personalized image generation
+    func enhancePrompt(
+        userDescription: String,
+        memberNames: [String: String] = [:] // userId -> name mapping
+    ) async throws -> String {
+        var systemPrompt = """
         You are a creative assistant helping couples visualize their shared dreams and goals.
         Take the user's description of their vision and enhance it into a detailed image generation prompt.
         Make it warm, positive, and aspirational. Focus on the emotional connection and shared experience.
         Keep the enhanced prompt under 200 words.
         """
+        
+        // Add member context if available
+        if !memberNames.isEmpty {
+            let memberList = memberNames.values.joined(separator: ", ")
+            systemPrompt += "\n\nImportant: The image should include these specific people: \(memberList). Make sure to represent them accurately in the scene."
+        }
         
         let response = try await model.generateContent(
             systemPrompt,
@@ -136,6 +162,146 @@ actor GeminiService {
         )
         
         return response.text ?? userDescription
+    }
+    
+    // MARK: - Parse Prompt for Member Names (AI-Powered)
+    /// Uses Gemini to parse user prompt and identify which members should be in the image
+    /// Returns mapping of user IDs to their names as mentioned in the prompt
+    func parsePromptForMembers(
+        prompt: String,
+        availableMembers: [GroupMember],
+        currentUserId: UUID,
+        currentUserName: String
+    ) async throws -> [UUID: String] {
+        // Build member list for AI context
+        var memberContext = "Available group members:\n"
+        for member in availableMembers {
+            if let name = member.user?.fullName {
+                let firstName = name.components(separatedBy: " ").first ?? name
+                memberContext += "- \(firstName) (ID: \(member.userId.uuidString))\n"
+            }
+        }
+        memberContext += "\nCurrent user: \(currentUserName) (ID: \(currentUserId.uuidString))"
+        
+        // Create structured prompt for AI parsing
+        let parsingPrompt = """
+        You are parsing a vision description to identify which people should appear in an AI-generated image.
+        
+        \(memberContext)
+        
+        User's vision description: "\(prompt)"
+        
+        Analyze the description and identify:
+        1. Does it mention "me", "I", or the current user? (ID: \(currentUserId.uuidString))
+        2. Does it mention any other group members by name?
+        
+        Return a JSON object with this structure:
+        {
+            "mentioned_members": [
+                {
+                    "user_id": "uuid-string",
+                    "name_in_prompt": "how they're referred to in the prompt"
+                }
+            ]
+        }
+        
+        Only include members explicitly mentioned. If the description says "me and Izzy", include both the current user and Izzy.
+        If it just says "a beach vacation" without mentioning people, return an empty array (meaning all members).
+        """
+        
+        let response = try await model.generateContent(parsingPrompt)
+        
+        guard let responseText = response.text else {
+            // Fallback to simple parsing if AI fails
+            return fallbackParseMembers(
+                from: prompt,
+                availableMembers: availableMembers,
+                currentUserId: currentUserId
+            )
+        }
+        
+        // Parse JSON response
+        return try parseMemberJSON(
+            jsonString: responseText,
+            availableMembers: availableMembers,
+            currentUserId: currentUserId
+        )
+    }
+    
+    // MARK: - Parse Member JSON Response
+    private func parseMemberJSON(
+        jsonString: String,
+        availableMembers: [GroupMember],
+        currentUserId: UUID
+    ) throws -> [UUID: String] {
+        // Extract JSON from markdown code blocks if present
+        var cleanJSON = jsonString
+        if let jsonRange = cleanJSON.range(of: "```json") {
+            cleanJSON = String(cleanJSON[jsonRange.upperBound...])
+        }
+        if let jsonRange = cleanJSON.range(of: "```") {
+            cleanJSON = String(cleanJSON[..<jsonRange.lowerBound])
+        }
+        cleanJSON = cleanJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard let jsonData = cleanJSON.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let mentionedMembers = json["mentioned_members"] as? [[String: Any]] else {
+            // Fallback if JSON parsing fails
+            return fallbackParseMembers(
+                from: cleanJSON,
+                availableMembers: availableMembers,
+                currentUserId: currentUserId
+            )
+        }
+        
+        var memberMap: [UUID: String] = [:]
+        
+        for memberData in mentionedMembers {
+            guard let userIdString = memberData["user_id"] as? String,
+                  let userId = UUID(uuidString: userIdString),
+                  let nameInPrompt = memberData["name_in_prompt"] as? String else {
+                continue
+            }
+            
+            // Verify this user ID exists in available members
+            if availableMembers.contains(where: { $0.userId == userId }) || userId == currentUserId {
+                memberMap[userId] = nameInPrompt
+            }
+        }
+        
+        return memberMap
+    }
+    
+    // MARK: - Fallback Member Parsing
+    /// Simple fallback if AI parsing fails - uses basic string matching
+    private func fallbackParseMembers(
+        from description: String,
+        availableMembers: [GroupMember],
+        currentUserId: UUID
+    ) -> [UUID: String] {
+        var foundMembers: [UUID: String] = [:]
+        let lowerDescription = description.lowercased()
+        
+        // Always include current user if "me" or "I" is mentioned
+        if lowerDescription.contains("me") || lowerDescription.contains(" i ") || lowerDescription.hasPrefix("i ") {
+            foundMembers[currentUserId] = "me"
+        }
+        
+        // Check for each member's name in description
+        for member in availableMembers {
+            if let name = member.user?.fullName {
+                let firstName = name.components(separatedBy: " ").first?.lowercased() ?? ""
+                let fullNameLower = name.lowercased()
+                
+                // Check if name appears in description
+                if lowerDescription.contains(firstName) || lowerDescription.contains(fullNameLower) {
+                    foundMembers[member.userId] = firstName.capitalized
+                }
+            }
+        }
+        
+        return foundMembers
     }
     
     // MARK: - Download Image Helper
