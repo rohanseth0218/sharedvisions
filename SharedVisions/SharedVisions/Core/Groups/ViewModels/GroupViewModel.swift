@@ -198,5 +198,28 @@ final class GroupViewModel: ObservableObject {
             return nil
         }
     }
+    
+    // MARK: - Update Aesthetic Profile
+    func updateAestheticProfile(groupId: UUID, aestheticProfile: AestheticProfile) async {
+        do {
+            // Encode aesthetic profile to JSON
+            let encoder = JSONEncoder()
+            let profileData = try encoder.encode(aestheticProfile)
+            let profileJSON = try JSONSerialization.jsonObject(with: profileData) as? [String: Any]
+            
+            try await supabase
+                .from(SupabaseService.Table.groups.rawValue)
+                .update(["aesthetic_profile": profileJSON])
+                .eq("id", value: groupId)
+                .execute()
+            
+            // Update local state
+            if let index = groups.firstIndex(where: { $0.id == groupId }) {
+                groups[index].aestheticProfile = aestheticProfile
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 

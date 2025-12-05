@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS groups (
   name TEXT NOT NULL,
   invite_code TEXT UNIQUE,
   created_by UUID REFERENCES profiles(id),
+  aesthetic_profile JSONB, -- Stores AestheticProfile: base_style, color_palette, mood, lighting, composition, overall_vibe
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

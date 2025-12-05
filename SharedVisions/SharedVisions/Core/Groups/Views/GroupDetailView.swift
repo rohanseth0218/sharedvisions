@@ -102,6 +102,38 @@ struct GroupDetailView: View {
                     }
                     .padding(.horizontal)
                     
+                    // Aesthetic Settings
+                    NavigationLink {
+                        AestheticSettingsView(group: group, groupViewModel: viewModel)
+                    } label: {
+                        HStack {
+                            Image(systemName: "paintpalette.fill")
+                                .font(.title3)
+                                .foregroundStyle(Color(red: 0.4, green: 0.2, blue: 0.6))
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Aesthetic Settings")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                Text(group.aestheticProfile != nil ? "Custom style set" : "Use default style")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .foregroundStyle(.primary)
+                        .padding()
+                        .background(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(.horizontal)
+                    
                     // Visions count
                     NavigationLink {
                         VisionGridView(groupFilter: group.id)

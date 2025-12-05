@@ -180,10 +180,20 @@ final class VisionViewModel: ObservableObject {
                 currentUserId: currentUserId
             )
             
-            // Enhance the prompt with member context
+            // Get group aesthetic profile for consistency
+            let group: Group = try await supabase
+                .from(SupabaseService.Table.groups.rawValue)
+                .select()
+                .eq("id", value: vision.groupId)
+                .single()
+                .execute()
+                .value
+            
+            // Enhance the prompt with member context and aesthetic profile
             let enhancedPrompt = try await geminiService.enhancePrompt(
                 userDescription: fullPrompt,
-                memberNames: memberNameMap
+                memberNames: memberNameMap,
+                aestheticProfile: group.aestheticProfile ?? AestheticProfile.default
             )
             
             // Generate image using Imagen API with member photos as context

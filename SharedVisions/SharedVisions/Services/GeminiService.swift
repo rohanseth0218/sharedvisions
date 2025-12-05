@@ -138,10 +138,11 @@ actor GeminiService {
     
     // MARK: - Enhance Prompt
     /// Uses Gemini to enhance a user's vision description into a better image prompt
-    /// Includes member names and context for personalized image generation
+    /// Includes member names, aesthetic profile, and context for personalized image generation
     func enhancePrompt(
         userDescription: String,
-        memberNames: [String: String] = [:] // userId -> name mapping
+        memberNames: [String: String] = [:], // userId -> name mapping
+        aestheticProfile: AestheticProfile? = nil
     ) async throws -> String {
         var systemPrompt = """
         You are a creative assistant helping couples visualize their shared dreams and goals.
@@ -156,12 +157,23 @@ actor GeminiService {
             systemPrompt += "\n\nImportant: The image should include these specific people: \(memberList). Make sure to represent them accurately in the scene."
         }
         
+        // Add aesthetic profile for consistency
+        if let aesthetic = aestheticProfile {
+            systemPrompt += "\n\nCRITICAL: Apply this consistent aesthetic to maintain visual harmony with all other images from this group:\n\(aesthetic.promptSuffix())"
+        }
+        
         let response = try await model.generateContent(
             systemPrompt,
             "User's vision: \(userDescription)"
         )
         
-        return response.text ?? userDescription
+        // Append aesthetic suffix to ensure consistency
+        var enhancedPrompt = response.text ?? userDescription
+        if let aesthetic = aestheticProfile {
+            enhancedPrompt += "\n\n\(aesthetic.promptSuffix())"
+        }
+        
+        return enhancedPrompt
     }
     
     // MARK: - Parse Prompt for Member Names (AI-Powered)
